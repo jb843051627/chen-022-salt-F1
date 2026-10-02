@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.pollix.at/thymeleaf/shiro">
+<head>
+    <th:block th:include="include :: header('碘含量分档判定线')"/>
+</head>
+<body class="pear-container">
+
+<!-- 线册翻检：全册逐条列，已停用在册、列得出，只是不参与判档 -->
+<div class="layui-card">
+    <div class="layui-card-header">线册翻检（已停用在册可列，不参与现行判定）</div>
+    <div class="layui-card-body">
+        <table id="ledger-table" lay-filter="ledger-table"></table>
+    </div>
+</div>
+
+<!-- 某刻在场名单：把线册逐条走一遍，只留问话那一刻在场的线 -->
+<div class="layui-card">
+    <div class="layui-card-header">某刻在场名单（立线之日含、让位之日不含；让位留空认作一直在场）</div>
+    <div class="layui-card-body">
+        <form class="layui-form" onsubmit="return false;">
+            <div class="layui-form-item">
+                <label class="layui-form-label">问话时刻</label>
+                <div class="layui-input-inline">
+                    <input type="text" id="avail-at" class="layui-input" placeholder="yyyy-MM-dd HH:mm:ss">
+                </div>
+                <button class="pear-btn pear-btn-md pear-btn-primary" id="avail-btn">
+                    <i class="layui-icon layui-icon-search"></i> 请在场名单
+                </button>
+                <span class="layui-badge layui-bg-gray" id="avail-count" style="margin-left:12px;">尚未问话</span>
+            </div>
+        </form>
+        <table id="available-table" lay-filter="available-table"></table>
+    </div>
+</div>
+
+<!-- 送检判档：问话那一刻决定取哪条线；挂代号时只许该代号在场的线说话 -->
+<div class="layui-card">
+    <div class="layui-card-header">送检判档（偏低 / 合规 / 过档；无可用线则代号、立线之日留空）</div>
+    <div class="layui-card-body">
+        <form class="layui-form" onsubmit="return false;">
+            <div class="layui-form-item">
+                <label class="layui-form-label">碘量(mg/kg)</label>
+                <div class="layui-input-inline">
+                    <input type="number" step="0.001" id="j-iodine" class="layui-input" placeholder="毫克每千克">
+                </div>
+                <label class="layui-form-label">问话时刻</label>
+                <div class="layui-input-inline">
+                    <input type="text" id="j-at" class="layui-input" placeholder="yyyy-MM-dd HH:mm:ss">
+                </div>
+                <label class="layui-form-label">挂线代号</label>
+                <div class="layui-input-inline">
+                    <input type="text" id="j-code" class="layui-input" placeholder="选填：结论已挂代号时核验">
+                </div>
+                <button class="pear-btn pear-btn-md pear-btn-primary" id="j-btn">判档</button>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">批验两刻</label>
+                <div class="layui-input-inline">
+                    <input type="text" id="b-sample" class="layui-input" placeholder="取样时刻">
+                </div>
+                <div class="layui-input-inline">
+                    <input type="text" id="b-seal" class="layui-input" placeholder="封样时刻">
+                </div>
+                <button class="pear-btn pear-btn-md" id="b-btn">取样/封样同线判档</button>
+                <span class="layui-word-aux">两刻落在两条线上即冲突，不给档位</span>
+            </div>
+        </form>
+        <div id="verdict-box" style="margin:0 15px 15px;"></div>
+    </div>
+</div>
+
+<!-- 孤儿单核对：屏上仍挂着代号、线册那一刻却请不出在场线的单子 -->
+<div class="layui-card">
+    <div class="layui-card-header">孤儿单核对（每行：报告代号,线代号,问话时刻）</div>
+    <div class="layui-card-body">
+        <textarea id="orphan-input" class="layui-textarea" style="height:90px;"
+                  placeholder="BJ202503001,LINE-A,2025-03-15 10:00:00&#10;BJ202503002,LINE-X,2025-03-15 10:00:00"></textarea>
+        <div style="margin-top:10px;">
+            <button class="pear-btn pear-btn-md pear-btn-primary" id="orphan-btn">逐条核对</button>
+        </div>
+        <table id="orphan-table" lay-filter="orphan-table" style="margin-top:12px;"></table>
+    </div>
+</div>
+
+<th:block th:include="include :: footer"/>
+<script>
+layui.use(['table', 'laydate', 'layer', 'jquery'], function () {
+    let table = layui.table;
+    let laydate = layui.laydate;
+    let layer = layui.layer;
+    let $ = layui.jquery;
+    let P = rootPath + "/SaltIodLineController/";
+
+    laydate.render({elem: '#avail-at', type: 'datetime', format: 'yyyy-MM-dd HH:mm:ss'});
+    laydate.render({elem: '#j-at', type: 'datetime', format: 'yyyy-MM-dd HH:mm:ss'});
+    laydate.render({elem: '#b-sample', type: 'datetime', format: 'yyyy-MM-dd HH:mm:ss'});
+    laydate.render({elem: '#b-seal', type: 'datetime', format: 'yyyy-MM-dd HH:mm:ss'});
+
+    let lineCols = [[
+        {field: 'ruleCode', title: '线代号', align: 'center', width: 130},
+        {field: 'ruleName', title: '线名', align: 'center'},
+        {field: 'th1Max', title: '起算', align: 'center', width: 90},
+        {field: 'th2Max', title: '够线', align: 'center', width: 90},
+        {field: 'th3Max', title: '封顶', align: 'center', width: 90},
+        {field: 'effStart', title: '立线之日', align: 'center', width: 170},
+        {field: 'effEnd', title: '让位之日(不含)', align: 'center', width: 170,
+            templet: function (d) { return d.effEnd ? d.effEnd : '<span class="layui-badge layui-bg-blue">一直在场</span>'; }},
+        {field: 'priority', title: '让位顺位', align: 'center', width: 90},
+        {field: 'status', title: '情形', align: 'center', width: 90,
+            templet: function (d) {
+                return d.status === 0
+                    ? '<span class="layui-badge layui-bg-green">在场</span>'
+                    : '<span class="layui-badge">已停用</span>';
+            }}
+    ]];
+
+    // 全册翻检
+    function loadLedger() {
+        $.get(P + 'ledger', function (rows) {
+            table.render({elem: '#ledger-table', data: rows || [], cols: lineCols,
+                skin: 'line', page: false, even: true});
+        });
+    }
+    loadLedger();
+
+    // 某刻在场名单
+    $('#avail-btn').on('click', function () {
+        let at = $('#avail-at').val();
+        if (!at) { layer.msg('问话时刻得填', {icon: 2}); return; }
+        $.get(P + 'available', {at: at}, function (res) {
+            if (res.code !== 200) { layer.msg(res.msg, {icon: 2}); return; }
+            let rows = res.data || [];
+            $('#avail-count').text('该刻在场 ' + rows.length + ' 条（顺位从上到下）');
+            table.render({elem: '#available-table', data: rows, cols: lineCols,
+                skin: 'line', page: false, even: true});
+        });
+    });
+
+    function gradeTag(g) {
+        let cls = { '偏低': 'layui-bg-orange', '合规': 'layui-bg-green',
+                    '过档': 'layui-bg-red', '无可用线': 'layui-bg-gray' }[g] || 'layui-bg-gray';
+        return '<span class="layui-badge ' + cls + '" style="font-size:15px;padding:6px 14px;">' + g + '</span>';
+    }
+    function showVerdict(res) {
+        if (res.code !== 200) {
+            $('#verdict-box').html('<div class="layui-alert layui-bg-red" style="padding:12px;">' + res.msg + '</div>');
+            return;
+        }
+        let d = res.data;
+        let code = d.ruleCode ? d.ruleCode : '<span class="layui-word-aux">（留空）</span>';
+        let start = d.effStart ? d.effStart : '<span class="layui-word-aux">（留空）</span>';
+        $('#verdict-box').html(
+            '<div style="padding:12px;background:#f8f8f8;border-radius:4px;">'
+            + '结论：' + gradeTag(d.grade)
+            + ' &nbsp; 线代号：<b>' + code + '</b>'
+            + ' &nbsp; 立线之日：<b>' + start + '</b>'
+            + (d.ruleName ? ' &nbsp; 线名：' + d.ruleName : '')
+            + ' &nbsp; 碘量：' + d.iodine
+            + '</div>');
+    }
+
+    // 送检判档（可挂代号核验）
+    $('#j-btn').on('click', function () {
+        let iodine = $('#j-iodine').val(), at = $('#j-at').val(), code = $('#j-code').val();
+        if (!iodine) { layer.msg('碘量得填', {icon: 2}); return; }
+        if (!at) { layer.msg('问话时刻得填', {icon: 2}); return; }
+        $.get(P + 'judge', {iodine: iodine, at: at, ruleCode: code}, showVerdict);
+    });
+
+    // 批验单：取样、封样同一条线
+    $('#b-btn').on('click', function () {
+        let iodine = $('#j-iodine').val(), s = $('#b-sample').val(), e = $('#b-seal').val();
+        if (!iodine) { layer.msg('碘量得填', {icon: 2}); return; }
+        if (!s || !e) { layer.msg('取样、封样两刻都得填', {icon: 2}); return; }
+        $.get(P + 'judgeBatch', {iodine: iodine, sampleAt: s, sealAt: e}, showVerdict);
+    });
+
+    // 孤儿单核对
+    $('#orphan-btn').on('click', function () {
+        let refs = [];
+        $('#orphan-input').val().split(/\n/).forEach(function (line) {
+            line = line.trim();
+            if (!line) return;
+            let p = line.split(',');
+            if (p.length < 3) return;
+            refs.push({bizNo: p[0].trim(), ruleCode: p[1].trim(), at: p.slice(2).join(',').trim()});
+        });
+        if (!refs.length) { layer.msg('每行按 报告代号,线代号,问话时刻 填', {icon: 2}); return; }
+        $.ajax({url: P + 'orphans', type: 'POST', contentType: 'application/json',
+            data: JSON.stringify(refs), success: function (res) {
+                if (res.code !== 200) { layer.msg(res.msg, {icon: 2}); return; }
+                let rows = res.data || [];
+                if (!rows.length) { layer.msg('没有孤儿单：挂着的代号那一刻都请得出在场线', {icon: 1}); }
+                table.render({elem: '#orphan-table', data: rows, even: true, skin: 'line', cols: [[
+                    {field: 'bizNo', title: '报告代号', align: 'center', width: 180},
+                    {field: 'ruleCode', title: '挂着的线代号', align: 'center', width: 160},
+                    {field: 'at', title: '问话时刻', align: 'center', width: 180},
+                    {field: 'reason', title: '请不出在场线的缘由', align: 'left'}
+                ]]});
+            }});
+    });
+});
+</script>
+</body>
+</html>
